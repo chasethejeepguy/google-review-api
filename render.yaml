@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: google-review-scraper
+    env: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install chromium
+      playwright install-deps chromium
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120
+    envVars:
+      - key: SCRAPER_API_KEY
+        generateValue: true
+      - key: MAX_CONCURRENT_SESSIONS
+        value: "2"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/.playwright
+    healthCheckPath: /health
