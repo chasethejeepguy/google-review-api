@@ -236,49 +236,60 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
                 await page.goto(new_url, timeout=20000)
                 await page.wait_for_timeout(6000)
                 debug.append(f"url-transform: {new_url[:80]}")
-            elif "/maps/search/" in cur:
+            el        if "/maps/search/" in cur:
                 # Click first result card on search page
                 for card_sel in ["[class*='Nv2PK'] a", "[class*='hfpxzc']", "a[href*='/maps/place/']"]:
                     try:
                         await page.click(card_sel, timeout=3000)
-                        await page.wait_for_timeout(4000)
+                        await page.wait_for_timeout(5000)
                         debug.append(f"clicked result card: {card_sel}")
                         break
                     except Exception:
                         pass
 
         # ── Step 4: Scroll repeatedly to load ALL reviews ────────────────────
-        # Google Maps lazy-loads reviews as you scroll. We keep scrolling
-        # until card count stops increasing or we've done 30 passes.
-        panel = None
-        for panel_sel in [".m6QErb.DxyBCb.kA9KIf.dS8AEf", ".m6QErb", "[class*='section-scrollbox']"]:
-            try:
-                panel = await page.query_selector(panel_sel)
-                if panel:
-                    debug.append(f"found scroll panel: {panel_sel}")
-                    break
-            except Exception:
-                pass
+        # Use scroll_into_view on the last card — most reliable way to trigger
+        # Google Maps infinite scroll regardless of panel selector changes.
+        stable_passes = 0
+        for scroll_pass in range(50):
+            current_cards = await page.query_selector_all("div[data-review-id]")
+            cur_count = len(current_cards)
 
-        prev_count = 0
-        for scroll_pass in range(30):
-            if panel:
+            # Strategy A: scroll last card into view (triggers lazy load)
+            if current_cards:
                 try:
-                    await page.evaluate("el => { el.scrollTop += 2000; }", panel)
+                    await current_cards[-1].scroll_into_view_if_needed()
                 except Exception:
-                    try:
-                        await page.evaluate("window.scrollBy(0, 2000);")
-                    except Exception:
-                        pass
+                    pass
+
+            # Strategy B: scroll inner reviews panel
+            for sel in [
+                ".m6QErb.DxyBCb.kA9KIf.dS8AEf",
+                ".m6QErb.WNBkOb",
+                ".m6QErb",
+                "[role='feed']",
+                "[data-hveid] [tabindex]",
+            ]:
+                try:
+                    el = await page.query_selector(sel)
+                    if el:
+                        await page.evaluate("el => { el.scrollTop += 3000; }", el)
+                        break
+                except Exception:
+                    pass
+
+            await page.wait_for_timeout(2500)
+
+            new_count = len(await page.query_selector_all("div[data-review-id]"))
+            debug.append(f"scroll {scroll_pass+1}: {cur_count}→{new_count} cards")
+
+            if new_count == cur_count:
+                stable_passes += 1
+                if stable_passes >= 4:
+                    debug.append("count stable 4x — all reviews loaded")
+                    break
             else:
-                await page.evaluate("window.scrollBy(0, 2000);")
-            await page.wait_for_timeout(1500)
-            cur_count = len(await page.query_selector_all("div[data-review-id]"))
-            debug.append(f"scroll pass {scroll_pass+1}: {cur_count} cards")
-            if cur_count == prev_count and scroll_pass >= 3:
-                debug.append("no new cards — stopping scroll")
-                break
-            prev_count = cur_count
+                stable_passes = 0
 
         # ── Step 5: Expand "See more" and extract review cards ───────────────
         for btn_sel in [
