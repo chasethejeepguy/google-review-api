@@ -76,7 +76,6 @@ async def lifespan(app: FastAPI):
             log.warning(f"playwright install stderr: {result.stderr.strip()}")
     except Exception as e:
         log.warning(f"Could not run playwright install: {e}")
-
     log.info("Launching shared Chromium browser…")
     _playwright = await async_playwright().start()
     _browser    = await _playwright.chromium.launch(
