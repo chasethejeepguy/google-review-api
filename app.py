@@ -99,6 +99,28 @@ class ScrapeRequest(BaseModel):
     first_name:   str  = ""
     last_name:    str  = ""
     filter_5star: bool = True
+    months_back:  int  = 120   # how far back to look (default 10 years)
+
+
+def relative_date_to_months(date_str: str) -> float:
+    """Convert Google's relative date string to approximate months."""
+    if not date_str:
+        return 0
+    s = date_str.lower().strip()
+    try:
+        if "just now" in s or "moment" in s:
+            return 0
+        if re.search(r'\d', s):
+            n = int(re.search(r'\d+', s).group())
+        else:
+            n = 1
+        if "day"   in s: return n / 30
+        if "week"  in s: return n * 7 / 30
+        if "month" in s: return float(n)
+        if "year"  in s: return n * 12
+    except Exception:
+        pass
+    return 0
 
 
 # ── Fuzzy name matching ───────────────────────────────────────────────────────
@@ -127,7 +149,7 @@ def fuzzy_name_match(text: str, first: str, last: str) -> bool:
 
 
 # ── Core scraping logic (runs inside one isolated BrowserContext) ─────────────
-async def scrape_in_context(store: str, first: str, last: str, filter_5: bool):
+async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, months_back: int = 120):
     debug: list[str] = []
 
     context = await _browser.new_context(
@@ -225,19 +247,38 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool):
                     except Exception:
                         pass
 
-        # ── Step 4: Scroll to trigger lazy loading ────────────────────────────
+        # ── Step 4: Scroll repeatedly to load ALL reviews ────────────────────
+        # Google Maps lazy-loads reviews as you scroll. We keep scrolling
+        # until card count stops increasing or we've done 30 passes.
+        panel = None
         for panel_sel in [".m6QErb.DxyBCb.kA9KIf.dS8AEf", ".m6QErb", "[class*='section-scrollbox']"]:
             try:
                 panel = await page.query_selector(panel_sel)
                 if panel:
-                    await page.evaluate("el => { el.scrollTop = 400; }", panel)
-                    await page.wait_for_timeout(1500)
-                    await page.evaluate("el => { el.scrollTop = 0; }", panel)
-                    await page.wait_for_timeout(1000)
-                    debug.append(f"scrolled: {panel_sel}")
+                    debug.append(f"found scroll panel: {panel_sel}")
                     break
             except Exception:
                 pass
+
+        prev_count = 0
+        for scroll_pass in range(30):
+            if panel:
+                try:
+                    await page.evaluate("el => { el.scrollTop += 2000; }", panel)
+                except Exception:
+                    try:
+                        await page.evaluate("window.scrollBy(0, 2000);")
+                    except Exception:
+                        pass
+            else:
+                await page.evaluate("window.scrollBy(0, 2000);")
+            await page.wait_for_timeout(1500)
+            cur_count = len(await page.query_selector_all("div[data-review-id]"))
+            debug.append(f"scroll pass {scroll_pass+1}: {cur_count} cards")
+            if cur_count == prev_count and scroll_pass >= 3:
+                debug.append("no new cards — stopping scroll")
+                break
+            prev_count = cur_count
 
         # ── Step 5: Expand "See more" and extract review cards ───────────────
         for btn_sel in [
@@ -325,6 +366,14 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool):
                 log.warning(f"Card parse error: {e}")
 
         # ── Step 6: Filter ────────────────────────────────────────────────────
+        # Remove any review containing "horrible" (case-insensitive)
+        all_reviews = [r for r in all_reviews if "horrible" not in r["text"].lower()]
+
+        # Filter by months_back
+        if months_back > 0:
+            all_reviews = [r for r in all_reviews
+                           if relative_date_to_months(r["date"]) <= months_back]
+
         if filter_5 and (first or last):
             matched = [r for r in all_reviews if r["rating"] == 5 and fuzzy_name_match(r["text"], first, last)]
         elif filter_5:
@@ -358,7 +407,7 @@ async def scrape(body: ScrapeRequest):
     async with _semaphore:
         try:
             reviews, debug = await scrape_in_context(
-                body.store, body.first_name, body.last_name, body.filter_5star
+                body.store, body.first_name, body.last_name, body.filter_5star, body.months_back
             )
             return {
                 "success":   True,
