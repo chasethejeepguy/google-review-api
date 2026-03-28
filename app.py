@@ -14,6 +14,8 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
+import sys
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header
@@ -61,6 +63,20 @@ _semaphore:  asyncio.Semaphore | None = None
 async def lifespan(app: FastAPI):
     """Launch one shared Chromium process at startup; reuse it for every request."""
     global _playwright, _browser, _semaphore
+
+    # Install Chromium if it's missing — handles cold starts on Render free tier
+    log.info("Ensuring Playwright Chromium is installed…")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=120
+        )
+        log.info(f"playwright install chromium: {result.stdout.strip() or 'ok'}")
+        if result.returncode != 0:
+            log.warning(f"playwright install stderr: {result.stderr.strip()}")
+    except Exception as e:
+        log.warning(f"Could not run playwright install: {e}")
+
     log.info("Launching shared Chromium browser…")
     _playwright = await async_playwright().start()
     _browser    = await _playwright.chromium.launch(
