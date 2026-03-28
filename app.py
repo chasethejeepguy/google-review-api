@@ -236,7 +236,7 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
                 await page.goto(new_url, timeout=20000)
                 await page.wait_for_timeout(6000)
                 debug.append(f"url-transform: {new_url[:80]}")
-            el        if "/maps/search/" in cur:
+            elif "/maps/search/" in cur:
                 # Click first result card on search page
                 for card_sel in ["[class*='Nv2PK'] a", "[class*='hfpxzc']", "a[href*='/maps/place/']"]:
                     try:
