@@ -5,8 +5,8 @@ services:
     plan: free
     buildCommand: |
       pip install -r requirements.txt
-      playwright install chromium
-      playwright install-deps chromium
+      PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright playwright install chromium
+      PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright playwright install-deps chromium
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 120
     envVars:
       - key: SCRAPER_API_KEY
