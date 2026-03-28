@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import async_playwright, Browser, Playwright
 from pydantic import BaseModel
@@ -362,13 +362,7 @@ async def health():
 
 
 @app.post("/scrape")
-async def scrape(
-    body: ScrapeRequest,
-    x_api_key: str = Header(default=""),
-):
-    if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+async def scrape(body: ScrapeRequest):
     if body.store not in PLACE_IDS:
         raise HTTPException(status_code=400, detail=f"Unknown store: {body.store}")
 
