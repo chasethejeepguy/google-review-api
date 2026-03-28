@@ -250,43 +250,69 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
         # ── Step 4: Scroll repeatedly to load ALL reviews ────────────────────
         # Use scroll_into_view on the last card — most reliable way to trigger
         # Google Maps infinite scroll regardless of panel selector changes.
+        # Scroll to scrollHeight (absolute bottom) each time — this is what
+        # triggers Google Maps to fetch the next batch of reviews.
+        PANEL_SELS = [
+            ".m6QErb.DxyBCb.kA9KIf.dS8AEf",
+            ".m6QErb.WNBkOb",
+            ".m6QErb",
+            "[role='feed']",
+        ]
+
+        # Find the scroll panel once
+        scroll_panel = None
+        for sel in PANEL_SELS:
+            try:
+                el = await page.query_selector(sel)
+                if el:
+                    scroll_panel = (el, sel)
+                    debug.append(f"scroll panel: {sel}")
+                    break
+            except Exception:
+                pass
+
         stable_passes = 0
-        for scroll_pass in range(50):
+        for scroll_pass in range(60):
             current_cards = await page.query_selector_all("div[data-review-id]")
             cur_count = len(current_cards)
 
-            # Strategy A: scroll last card into view (triggers lazy load)
+            # Scroll panel to absolute bottom (triggers next batch)
+            if scroll_panel:
+                try:
+                    await page.evaluate(
+                        "el => { el.scrollTop = el.scrollHeight; }",
+                        scroll_panel[0]
+                    )
+                except Exception:
+                    scroll_panel = None
+
+            # Also scroll last card into view as a backup trigger
             if current_cards:
                 try:
                     await current_cards[-1].scroll_into_view_if_needed()
                 except Exception:
                     pass
 
-            # Strategy B: scroll inner reviews panel
-            for sel in [
-                ".m6QErb.DxyBCb.kA9KIf.dS8AEf",
-                ".m6QErb.WNBkOb",
-                ".m6QErb",
-                "[role='feed']",
-                "[data-hveid] [tabindex]",
-            ]:
-                try:
-                    el = await page.query_selector(sel)
-                    if el:
-                        await page.evaluate("el => { el.scrollTop += 3000; }", el)
-                        break
-                except Exception:
-                    pass
+            # If panel was lost, re-find it
+            if not scroll_panel:
+                for sel in PANEL_SELS:
+                    try:
+                        el = await page.query_selector(sel)
+                        if el:
+                            scroll_panel = (el, sel)
+                            break
+                    except Exception:
+                        pass
 
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(3000)
 
             new_count = len(await page.query_selector_all("div[data-review-id]"))
-            debug.append(f"scroll {scroll_pass+1}: {cur_count}→{new_count} cards")
+            debug.append(f"scroll {scroll_pass+1}: {cur_count}→{new_count}")
 
             if new_count == cur_count:
                 stable_passes += 1
-                if stable_passes >= 4:
-                    debug.append("count stable 4x — all reviews loaded")
+                if stable_passes >= 5:
+                    debug.append(f"stable 5x at {new_count} — done")
                     break
             else:
                 stable_passes = 0
