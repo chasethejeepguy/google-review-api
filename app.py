@@ -249,9 +249,9 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
 
         # ── Step 4: Scroll repeatedly to load ALL reviews ────────────────────
         # Use scroll_into_view on the last card — most reliable way to trigger
-        # Google Maps infinite scroll regardless of panel selector changes.
-        # Scroll to scrollHeight (absolute bottom) each time — this is what
-        # triggers Google Maps to fetch the next batch of reviews.
+        # Google Maps infinite scroll — scroll to absolute bottom each pass.
+        # Re-query the panel element every pass to avoid stale handles.
+        # 35 passes × 2 s = 70 s max, well within the 300 s iOS timeout.
         PANEL_SELS = [
             ".m6QErb.DxyBCb.kA9KIf.dS8AEf",
             ".m6QErb.WNBkOb",
@@ -259,32 +259,50 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
             "[role='feed']",
         ]
 
-        # Find the scroll panel once
-        scroll_panel = None
+        # Identify which selector works once, then reuse that selector string
+        active_sel = None
         for sel in PANEL_SELS:
             try:
                 el = await page.query_selector(sel)
                 if el:
-                    scroll_panel = (el, sel)
+                    active_sel = sel
                     debug.append(f"scroll panel: {sel}")
                     break
             except Exception:
                 pass
 
         stable_passes = 0
-        for scroll_pass in range(60):
+        for scroll_pass in range(35):
             current_cards = await page.query_selector_all("div[data-review-id]")
             cur_count = len(current_cards)
 
-            # Scroll panel to absolute bottom (triggers next batch)
-            if scroll_panel:
+            # Scroll panel to absolute bottom using selector (no stale handle)
+            if active_sel:
                 try:
-                    await page.evaluate(
-                        "el => { el.scrollTop = el.scrollHeight; }",
-                        scroll_panel[0]
+                    scrolled = await page.evaluate(
+                        """sel => {
+                            const el = document.querySelector(sel);
+                            if (!el) return false;
+                            el.scrollTop = el.scrollHeight;
+                            return true;
+                        }""",
+                        active_sel
                     )
+                    if not scrolled:
+                        active_sel = None
                 except Exception:
-                    scroll_panel = None
+                    active_sel = None
+
+            # Re-detect panel if lost
+            if not active_sel:
+                for sel in PANEL_SELS:
+                    try:
+                        el = await page.query_selector(sel)
+                        if el:
+                            active_sel = sel
+                            break
+                    except Exception:
+                        pass
 
             # Also scroll last card into view as a backup trigger
             if current_cards:
@@ -293,18 +311,7 @@ async def scrape_in_context(store: str, first: str, last: str, filter_5: bool, m
                 except Exception:
                     pass
 
-            # If panel was lost, re-find it
-            if not scroll_panel:
-                for sel in PANEL_SELS:
-                    try:
-                        el = await page.query_selector(sel)
-                        if el:
-                            scroll_panel = (el, sel)
-                            break
-                    except Exception:
-                        pass
-
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(2000)
 
             new_count = len(await page.query_selector_all("div[data-review-id]"))
             debug.append(f"scroll {scroll_pass+1}: {cur_count}→{new_count}")
